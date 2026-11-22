@@ -70,12 +70,14 @@
   .actions { display: flex; gap: 8px; }
   .actions .btn.primary { flex: 1; }
 
-  .field > label.ref { display: flex; align-items: center; gap: 12px; border: 1px dashed #c9cfd6; border-radius: 12px; padding: 12px; cursor: pointer; font-weight: 400; margin: 0; }
-  .ref.over { border-color: var(--accent); background: var(--accent-soft); }
-  .ref .thumb { width: 64px; height: 64px; border-radius: 10px; flex: none; display: grid; place-items: center; color: var(--faint); font-size: 22px; }
-  .ref .thumb img { width: 100%; height: 100%; object-fit: contain; }
-  .ref .txt { flex: 1; min-width: 0; font-size: 14px; }
-  .ref .txt small { display: block; color: var(--sub); font-size: 13px; }
+  .refs { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; border: 1px dashed #c9cfd6; border-radius: 12px; }
+  .refs.over { border-color: var(--accent); background: var(--accent-soft); }
+  .refitem { position: relative; width: 72px; height: 72px; border-radius: 10px; overflow: hidden; }
+  .refitem img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .refitem button { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border-radius: 50%; border: 0; background: rgba(25,31,40,.6); color: #fff; font-size: 11px; line-height: 1; padding: 0; }
+  .refadd { width: 72px; height: 72px; border-radius: 10px; border: 0; background: var(--fill); color: var(--faint); font-size: 22px; }
+  .refadd:hover { background: #e5e8eb; }
+  .count { font-weight: 400; color: var(--sub); font-size: 13px; margin-left: 4px; }
 
   details { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 14px; }
   summary { font-size: 13px; color: var(--sub); cursor: pointer; font-weight: 600; }
@@ -173,6 +175,7 @@
   <aside class="card panel">
     <div class="tabs" role="tablist">
       <button role="tab" data-tab="create" aria-selected="true">만들기</button>
+      <button role="tab" data-tab="edit" aria-selected="false">수정</button>
       <button role="tab" data-tab="angle" aria-selected="false">각도</button>
       <button role="tab" data-tab="color" aria-selected="false">색상</button>
     </div>
@@ -186,13 +189,10 @@
       </div>
 
       <div class="field">
-        <span class="label">레퍼런스 아이콘</span>
-        <label class="ref" id="refDrop">
-          <span class="thumb checker" id="refThumb">＋</span>
-          <span class="txt"><span id="refTitle">이미지 올리기</span><small id="refSub">조명, 재질, 모서리 둥글기를 여기서 따라가요</small></span>
-          <button class="btn small" id="refClear" type="button" hidden>빼기</button>
-          <input type="file" id="refFile" accept="image/png,image/jpeg,image/webp" hidden>
-        </label>
+        <span class="label">레퍼런스 아이콘<span class="count" id="refCount"></span></span>
+        <div class="refs" id="refs"></div>
+        <input type="file" id="refFile" accept="image/png,image/jpeg,image/webp" multiple hidden>
+        <p class="hint">조명, 재질, 모서리 둥글기를 여기서 따라가요. 장수만큼 생성 비용이 늘어서 최대 3장까지 넣을 수 있어요.</p>
       </div>
 
       <div class="actions">
@@ -207,6 +207,21 @@
         <p class="hint">[SUBJECT] 자리에 위 설명이 들어가요. 레퍼런스가 없으면 레퍼런스 문단은 빼고 보내요.</p>
         <button class="btn small" id="templateReset" style="margin-top:8px">처음 틀로 되돌리기</button>
       </details>
+    </section>
+
+    <!-- 수정 -->
+    <section class="tabpane" data-pane="edit" hidden>
+      <div class="field">
+        <label for="editText">어떻게 고칠까요?</label>
+        <textarea id="editText" placeholder="바꿀 것만 적어 주세요. 나머지는 그대로 둬요.&#10;예: 50%를 30%로 변경"></textarea>
+        <div class="chips" id="editExamples"></div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="editBtn">수정해서 다시 만들기</button>
+        <button class="btn" data-copy="edit">프롬프트 복사</button>
+      </div>
+      <p class="hint">지금 보고 있는 아이콘의 형태, 질감, 조명은 그대로 두고 적은 부분만 바꿔요. 글자는 같은 서체 스타일로 바뀌어요. 결과는 새 버전으로 쌓이고 원본은 그대로 남아요.</p>
+      <details><summary>보낼 프롬프트 보기</summary><pre class="prompt" id="editPrompt"></pre></details>
     </section>
 
     <!-- 각도 -->
@@ -373,13 +388,24 @@ const BGS = [['투명', ''], ['흰색', '#ffffff'], ['회색', '#f2f4f6'], ['파
 const $ = (s) => document.querySelector(s);
 const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
-  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  set(k, v) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
   del(k) { try { localStorage.removeItem(k); } catch {} },
 };
 
+const MAX_REFS = 3; // 레퍼런스 한 장마다 입력 토큰(비용)이 늘어서 장수를 제한합니다.
+function loadRefs() {
+  try {
+    const saved = JSON.parse(store.get('refs', '[]'));
+    if (Array.isArray(saved) && saved.length) return saved.slice(0, MAX_REFS);
+  } catch {}
+  const old = store.get('ref', null); // 한 장만 넣던 예전 버전
+  return old ? [old] : [];
+}
+const EDIT_EXAMPLES = ['50%를 30%로 변경', '파란색을 노란색으로 변경', '같은 서체 스타일로 글자만 NEW로 변경', '뚜껑을 반투명 아크릴로 변경'];
+
 const state = {
   hasKey: false, items: [], currentId: null, busy: false,
-  ref: store.get('ref', null),
+  refs: loadRefs(),
   yaw: 35, pitch: 20,
   adj: { h: 0, s: 0, l: 0 },
   src: null,       // 현재 아이콘 원본 캔버스
@@ -513,15 +539,39 @@ function setBusy(on, text) {
   state.busy = on;
   $('#busy').hidden = !on;
   if (text) $('#busyText').textContent = text;
-  for (const id of ['createBtn', 'angleBtn', 'colorBtn']) $('#' + id).disabled = on;
+  for (const id of ['createBtn', 'editBtn', 'angleBtn', 'colorBtn']) $('#' + id).disabled = on;
 }
 
 /* ---------- 프롬프트 ---------- */
 function buildCreatePrompt() {
   const subject = $('#subject').value.trim() || '[SUBJECT]';
   let paragraphs = $('#template').value.split(/\n\s*\n/);
-  if (!state.ref) paragraphs = paragraphs.filter((p) => !/attached icon/i.test(p));
-  return paragraphs.join('\n\n').replace('[SUBJECT]', () => subject);
+  if (!state.refs.length) paragraphs = paragraphs.filter((p) => !/attached icon/i.test(p));
+  let text = paragraphs.join('\n\n');
+  if (state.refs.length > 1) text = text.replace(/the attached icon\b/gi, 'the attached icons');
+  return text.replace('[SUBJECT]', () => subject);
+}
+
+function buildEditPrompt() {
+  const change = $('#editText').value.trim() || '[수정 사항]';
+  return `Edit the attached 3D icon. Apply only this change:
+"${change}"
+
+First analyze the icon's shape, proportions, materials, surface
+finish, colors, lighting, and camera angle. Then regenerate it in
+exactly the same style with only the requested change applied.
+Everything that is not mentioned stays identical.
+
+If the change replaces text or numbers, keep the typeface style,
+weight, size, color, material, depth, and placement of the existing
+lettering, and render the new characters exactly as written.
+
+If the change is a color, recolor only the named part and let its
+highlights, reflections, and shading follow the new color naturally.
+
+Composition: Keep the icon centered on a square canvas with the same
+padding. Use a true transparent alpha background. No floor or cast
+shadow. Do not add anything that was not requested.`;
 }
 
 function describeAngle(yaw, pitch) {
@@ -557,7 +607,7 @@ function buildAnglePrompt() {
 
 The first attached image is the icon. Keep its shape, proportions,
 colors, materials, and every detail identical. Do not redesign, add,
-or remove anything.${state.ref ? ' The second attached image is only a reference for\nlighting and material finish.' : ''}
+or remove anything.
 
 Camera: Use ${describeAngle(yaw, pitch)}. Measured from the object's own
 straight-on, eye-level front view (not from the current image), the
@@ -596,9 +646,10 @@ transmission at the edges follow the new color naturally.
 ${COMPOSITION}`;
 }
 
-const PROMPTS = { create: buildCreatePrompt, angle: buildAnglePrompt, color: buildColorPrompt };
+const PROMPTS = { create: buildCreatePrompt, edit: buildEditPrompt, angle: buildAnglePrompt, color: buildColorPrompt };
 
 function refreshPrompts() {
+  $('#editPrompt').textContent = buildEditPrompt();
   $('#anglePrompt').textContent = buildAnglePrompt();
   $('#colorPrompt').textContent = buildColorPrompt();
   $('#aiColorHex').textContent = `${$('#aiColor').value.toUpperCase()} · ${colorName($('#aiColor').value)}`;
@@ -787,7 +838,7 @@ $('#createBtn').onclick = () => {
   const subject = $('#subject').value.trim();
   if (!subject) { $('#subject').focus(); return toast('무엇을 만들지 먼저 적어 주세요.'); }
   if (!$('#template').value.includes('[SUBJECT]')) return toast('프롬프트 틀에 [SUBJECT] 가 없어서 설명이 들어가지 않아요. 틀에 [SUBJECT] 를 넣어 주세요.', true);
-  generate({ kind: 'create', label: subject.split(/[.,\n]/)[0].slice(0, 24), prompt: buildCreatePrompt(), images: state.ref ? [dataUrlToBlob(state.ref)] : [], busyText: '아이콘을 만드는 중' });
+  generate({ kind: 'create', label: subject.split(/[.,\n]/)[0].slice(0, 24), prompt: buildCreatePrompt(), images: state.refs.map(dataUrlToBlob), busyText: '아이콘을 만드는 중' });
 };
 
 function needCurrent() {
@@ -798,10 +849,23 @@ function needCurrent() {
 
 $('#angleBtn').onclick = () => {
   if (!needCurrent()) return;
-  const images = [current().blob];
-  if (state.ref) images.push(dataUrlToBlob(state.ref));
-  generate({ kind: 'angle', label: `각도 ${angleKorean(state.yaw, state.pitch)}`, prompt: buildAnglePrompt(), images, busyText: '새 각도로 다시 그리는 중' });
+  // 스타일은 아이콘 자체에 담겨 있어서, 비용을 아끼려고 레퍼런스는 함께 보내지 않습니다.
+  generate({ kind: 'angle', label: `각도 ${angleKorean(state.yaw, state.pitch)}`, prompt: buildAnglePrompt(), images: [current().blob], busyText: '새 각도로 다시 그리는 중' });
 };
+
+$('#editBtn').onclick = () => {
+  if (!needCurrent()) return;
+  const change = $('#editText').value.trim();
+  if (!change) { $('#editText').focus(); return toast('어떻게 고칠지 먼저 적어 주세요.'); }
+  generate({ kind: 'edit', label: `수정: ${change.slice(0, 20)}`, prompt: buildEditPrompt(), images: [current().blob], busyText: '수정해서 다시 만드는 중' });
+};
+$('#editText').value = store.get('editText', '');
+$('#editText').oninput = () => { store.set('editText', $('#editText').value); refreshPrompts(); };
+for (const text of EDIT_EXAMPLES) {
+  const b = Object.assign(document.createElement('button'), { className: 'chip', textContent: text, type: 'button' });
+  b.onclick = () => { $('#editText').value = text; store.set('editText', text); refreshPrompts(); };
+  $('#editExamples').append(b);
+}
 
 $('#colorBtn').onclick = () => {
   if (!needCurrent()) return;
@@ -829,32 +893,53 @@ for (const [name, text] of EXAMPLES) {
   $('#examples').append(b);
 }
 
-function renderRef() {
-  const thumb = $('#refThumb');
-  thumb.replaceChildren();
-  if (state.ref) {
-    thumb.append(Object.assign(new Image(), { src: state.ref, alt: '레퍼런스 아이콘' }));
-    $('#refTitle').textContent = '레퍼런스가 들어갔어요';
-    $('#refSub').textContent = '눌러서 다른 이미지로 바꿀 수 있어요';
-  } else {
-    thumb.textContent = '＋';
-    $('#refTitle').textContent = '이미지 올리기';
-    $('#refSub').textContent = '조명, 재질, 모서리 둥글기를 여기서 따라가요';
+function persistRefs() {
+  store.del('ref');
+  if (!state.refs.length) return store.del('refs');
+  if (!store.set('refs', JSON.stringify(state.refs))) {
+    store.del('refs');
+    toast('레퍼런스 용량이 커서 이 브라우저에 기억해 두지 못했어요. 새로고침하면 다시 올려 주세요.');
   }
-  $('#refClear').hidden = !state.ref;
+}
+function renderRefs() {
+  const box = $('#refs');
+  box.replaceChildren();
+  state.refs.forEach((src, i) => {
+    const item = Object.assign(document.createElement('div'), { className: 'refitem checker' });
+    const del = Object.assign(document.createElement('button'), { type: 'button', textContent: '✕', title: '빼기' });
+    del.setAttribute('aria-label', `레퍼런스 ${i + 1} 빼기`);
+    del.onclick = () => { state.refs.splice(i, 1); persistRefs(); renderRefs(); };
+    item.append(Object.assign(new Image(), { src, alt: `레퍼런스 ${i + 1}` }), del);
+    box.append(item);
+  });
+  if (state.refs.length < MAX_REFS) {
+    const add = Object.assign(document.createElement('button'), { type: 'button', className: 'refadd', textContent: '＋', title: '레퍼런스 올리기' });
+    add.setAttribute('aria-label', '레퍼런스 이미지 올리기');
+    add.onclick = () => $('#refFile').click();
+    box.append(add);
+  }
+  $('#refCount').textContent = `${state.refs.length}/${MAX_REFS}`;
   refreshPrompts();
 }
-async function setRef(file) {
-  if (!file || !file.type.startsWith('image/')) return;
-  try { state.ref = await fileToPng(file); store.set('ref', state.ref); renderRef(); }
-  catch { toast('이미지를 읽지 못했어요. PNG, JPG, WebP 파일을 올려 주세요.', true); }
+async function addRefs(fileList) {
+  const files = [...fileList].filter((f) => f.type.startsWith('image/'));
+  if (!files.length) return;
+  const room = MAX_REFS - state.refs.length;
+  if (room <= 0) return toast(`레퍼런스는 최대 ${MAX_REFS}장까지예요. 하나를 빼고 넣어 주세요.`);
+  let failed = 0;
+  for (const file of files.slice(0, room)) {
+    try { state.refs.push(await fileToPng(file, 768)); } catch { failed++; }
+  }
+  persistRefs();
+  renderRefs();
+  if (failed) toast('읽지 못한 이미지가 있어요. PNG, JPG, WebP 파일을 올려 주세요.', true);
+  else if (files.length > room) toast(`레퍼런스는 최대 ${MAX_REFS}장까지예요. 앞의 ${room}장만 넣었어요.`);
 }
-$('#refFile').onchange = (e) => { setRef(e.target.files[0]); e.target.value = ''; };
-$('#refClear').onclick = (e) => { e.preventDefault(); state.ref = null; store.del('ref'); renderRef(); };
-const drop = $('#refDrop');
+$('#refFile').onchange = (e) => { addRefs(e.target.files); e.target.value = ''; };
+const drop = $('#refs');
 drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
 drop.ondragleave = () => drop.classList.remove('over');
-drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); setRef(e.dataTransfer.files[0]); };
+drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); addRefs(e.dataTransfer.files); };
 
 /* ---------- 각도 탭 ---------- */
 function setAngle(yaw, pitch) {
@@ -996,7 +1081,7 @@ $('#saveSettings').onclick = async () => {
 
 /* ---------- 시작 ---------- */
 (async function init() {
-  renderRef();
+  renderRefs();
   setAngle(state.yaw, state.pitch);
   syncAdjustLabels();
   state.hasKey = Boolean(store.get('apiKey', ''));
